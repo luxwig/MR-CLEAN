@@ -10,8 +10,7 @@
 
 noiseRaw = mapVBVD(noiseID);
 
-noiseData = squeeze(noiseRaw{2}.image(:,:,:,1,:,1,1,1,:,1,:)); 
-noiseData = sum(noiseData,6);
+noiseData = squeeze(noiseRaw{2}.image(:,:,:,:,1,1,1,1,:));
 noiseData = reshape(noiseData,size(noiseData,1),size(noiseData,2),size(noiseData,3),[]);
 noiseData = permute(noiseData, [3 4 1 2]); % PE x slice x RO x Coil
 [NPE, NSLICE, NRO, NCOIL] = size(noiseData);
