@@ -1,8 +1,10 @@
-function ksp_denoised = klean(ksp_noise, ksp_data, patch_size, varargin)
+function [ksp_denoised, info] = klean(ksp_noise, ksp_data, patch_size, varargin)
 %KLEAN Prewhiten + local low-rank denoising of high-dimensional k-space data.
 %
 %   ksp_denoised = KLEAN(ksp_noise, ksp_data, patch_size)
 %   ksp_denoised = KLEAN(ksp_noise, ksp_data, patch_size, {casorati_shape, sv_threshold})
+%   [ksp_denoised, info] = KLEAN(ksp_noise, ksp_data, patch_size)
+%   [ksp_denoised, info] = KLEAN(ksp_noise, ksp_data, patch_size, {casorati_shape, sv_threshold})
 %
 %   This function performs:
 %     1) Noise prewhitening using ksp_noise to estimate a whitening transform.
@@ -35,9 +37,13 @@ function ksp_denoised = klean(ksp_noise, ksp_data, patch_size, varargin)
 %                        corresponding to casorati_shape.
 %       If not provided, thresholds are computed internally via compute_sv_threshold().
 %
-%   Output:
+%   Outputs:
 %     ksp_denoised  - Denoised k-space data (same size as ksp_data).
 %                    Size: [n_ro, n_pe1, n_pe2, n_coil, n_t].
+%     info          - Optional patch-grid diagnostics, returned when requested.
+%                    info.retain_pct: retained singular-value fraction per patch.
+%                    info.s: singular values (before thresholded) per patch.
+%                    info.thr: singular-value threshold applied per patch.
 %
 %   Notes:
 %     - The coil dimension of ksp_noise and ksp_data must match.
@@ -47,7 +53,7 @@ function ksp_denoised = klean(ksp_noise, ksp_data, patch_size, varargin)
 
     assert(size(ksp_data,4)==size(ksp_noise,4), ...
         'Mismatch in number of coils between data and noise.');
-    
+
     [~, ~, ~, n_coil] = size(ksp_noise);
     ksp_noise = reshape(ksp_noise, [], n_coil);
     w = prewhiten(ksp_noise);
@@ -68,27 +74,50 @@ function ksp_denoised = klean(ksp_noise, ksp_data, patch_size, varargin)
     ksp_data = reshape(ksp_data, [n_ro, n_pe1, n_pe2, n_t, n_coil]);
     ksp_data = permute(ksp_data, [1 2 3 5 4]);
 
+    info = [];
+    if (nargout > 1)
+        info = struct;
+        info.retain_pct = zeros(length(1:patch_size(1):n_ro), ...
+                       length(1:patch_size(2):n_pe1), ...
+                       length(1:patch_size(3):n_pe2));
+        info.s = zeros(length(1:patch_size(1):n_ro), ...
+                       length(1:patch_size(2):n_pe1), ...
+                       length(1:patch_size(3):n_pe2),n_t);
+        info.thr = zeros(length(1:patch_size(1):n_ro), ...
+                       length(1:patch_size(2):n_pe1), ...
+                       length(1:patch_size(3):n_pe2));
+    end
     ksp_denoised = zeros(n_ro, n_pe1, n_pe2, n_coil, n_t);
+    k_counter = 1;
     for k = 1:patch_size(3):n_pe2
         k_range  = k:min([k+patch_size(3)-1, n_pe2]);
+        i_counter = 1;
         for i = 1:patch_size(1):n_ro
             i_range = i:min([i+patch_size(1)-1, n_ro]);
+            j_counter = 1;
             for j = 1:patch_size(2):n_pe1            
                 j_range = j:min([j+patch_size(2)-1, n_pe1]);
-
-                ksp_work = ksp_data(i_range, j_range, k_range, :, :);
-                casorati = ksp_work(1:length(i_range), 1:length(j_range), 1:length(k_range), :, :);
-                casorati = reshape(casorati, [], n_t);
+                casorati = reshape( ...
+                    ksp_data(i_range, j_range, k_range, :, :), [], n_t);
                 [u,s,v] = svd(casorati, 'econ');
                 thr = get_sv_threshold(size(casorati,1));
                 s(s<thr) = 0;
+                if isstruct(info)
+                    info.retain_pct(i_counter,j_counter,k_counter) = ...
+                        nnz(diag(s) >= thr)/numel(diag(s));
+                    info.s(i_counter,j_counter,k_counter,:) = diag(s);
+                    info.thr(i_counter,j_counter,k_counter) = thr;
+                end
                 casorati = u*s*v';
-                ksp_work = reshape(casorati, ...
-                    length(i_range), length(j_range), length(k_range), ...
-                    n_coil, n_t);
-                ksp_denoised(i_range, j_range, k_range, :, :) = ksp_work;
+                ksp_denoised(i_range, j_range, k_range, :, :) = ...
+                    reshape(casorati, length(i_range), ...
+                                      length(j_range), ...
+                                      length(k_range), n_coil, n_t);
+                j_counter = j_counter + 1;
             end
+            i_counter = i_counter + 1;
         end
+        k_counter = k_counter + 1;
     end
 
 ksp_denoised = reshape(permute(ksp_denoised, [1 2 3 5 4]), [], n_coil) * inv(w);
